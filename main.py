@@ -1,3 +1,4 @@
+import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import numpy as np
@@ -249,8 +250,7 @@ def fetch_pred():
 
 
 
-if __name__ == '__main__':
-    app.run(debug=True)
-
+if __name__ == "__main__":
+    app.run(debug=True, port=os.getenv("PORT", default=5000))
 
 
