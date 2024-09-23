@@ -1,4 +1,4 @@
-name: Backend CI
+name: CI Pipeline
 
 on:
   push:
@@ -9,25 +9,36 @@ on:
       - main
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-      - name: Run tests
-        run: |
-          # Add commands to run your tests here
-          # For example:
-          pytest
+    - name: Run unit and API tests
+      env:
+        FLASK_APP: main.py
+      run: |
+        # Start Flask app (in the background)
+        flask run &
+
+        # Run tests (using pytest)
+        pytest --maxfail=1 --disable-warnings -v
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: pytest-results
+        path: pytest-report.xml
