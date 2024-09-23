@@ -38,6 +38,37 @@ def test_get_data(client):
         assert len(data) == 2
         assert data[0]['Column1'] == 'a'
 
+"""Test for the /api/get_data_by_district route."""
+def test_get_data_by_district(client):
+    with patch('main.df', pd.DataFrame({
+        'Column1': ['a', 'b', 'c', 'd'],
+        'Column2': [1, 2, 3, 4],
+        'leanm': ['District1', 'District2', 'District1', 'District3'],
+        'leaid': [101, 102, 101, 103]
+    })):
+        # Test without filtering
+        response = client.get('/api/get_data', query_string={'start': 0, 'limit': 3})
+        assert response.status_code == 200
+        data = response.json
+        assert len(data) == 3
+        assert data[0]['Column1'] == 'a'
+
+        # Test with district name filtering
+        response = client.get('/api/get_data', query_string={'start': 0, 'limit': 3, 'district_name': 'District1'})
+        assert response.status_code == 200
+        data = response.json
+        assert len(data) == 2
+        assert data[0]['Column1'] == 'a'
+        assert data[1]['Column1'] == 'c'
+
+        # Test with district ID filtering
+        response = client.get('/api/get_data', query_string={'start': 0, 'limit': 3, 'district_id': '101'})
+        assert response.status_code == 200
+        data = response.json
+        assert len(data) == 2
+        assert data[0]['Column1'] == 'a'
+        assert data[1]['Column1'] == 'c'
+
 """Test for the /api/get_length route."""
 def test_get_length(client):
     with patch('main.df', pd.DataFrame({

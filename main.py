@@ -73,9 +73,35 @@ def get_data():
     data_slice = data_slice.where(pd.notna(data_slice), placeholder )
     data_json = data_slice.to_dict(orient='records')
 
-
-    
     return jsonify(data_json)
+
+
+@app.route('/api/get_data_by_district', methods=['GET'])
+def get_data():
+    start = int(request.args.get('start'))
+    rows = int(request.args.get('limit'))
+    district_name = request.args.get('district_name')
+    district_id = request.args.get('district_id')
+
+    if district_name:
+        district_names = district_name.split(',')
+        data_slice = df[df['leanm'].isin(district_names)]
+    elif district_id:
+        district_ids = district_id.split(',')
+        data_slice = df[df['leaid'].isin(district_ids)]
+    else:
+        data_slice = df
+
+    data_slice = data_slice.iloc[start:start + rows]
+    data_slice.insert(0, 'Index', (data_slice.index + 1))
+    print(data_slice)
+
+    placeholder = ""
+    data_slice = data_slice.where(pd.notna(data_slice), placeholder)
+    data_json = data_slice.to_dict(orient='records')
+
+    return jsonify(data_json)
+
 
 
 @app.route('/api/get_length', methods=['GET'])
