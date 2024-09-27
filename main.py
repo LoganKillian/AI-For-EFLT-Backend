@@ -7,7 +7,7 @@ from IPython.display import display
 from sklearn.discriminant_analysis import StandardScaler
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, normalize
 import tqdm
-
+from clean import encode_locale4, encode_ct_econtype, encode_leamn_with_frequency, encode_grade, encode_year
 from Predictor import FeaturePredictor
 import models
 
@@ -54,6 +54,12 @@ def init_data():
         if df_sub[column].dtype == 'object':
             df_sub[column] = pd.to_numeric(df_sub[column], errors='coerce')
 
+    # categorical data encoding
+    df_sub = encode_locale4(df_sub)  # Locale4 
+    df_sub = encode_ct_econtype(df_sub)  # CT_EconType 
+    df_sub = encode_leamn_with_frequency(df_sub)  # leanm 
+    df_sub = encode_grade(df_sub)  # Grade 
+    
     s = "okay"
     return jsonify(s)
 
