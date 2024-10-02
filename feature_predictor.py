@@ -9,14 +9,14 @@ FeatureConstraint = namedtuple('FeatureConstraint', ['weight', 'min_val', 'max_v
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class FeaturePredictor:
-    """Class used to predict feature adjustments for Lasso regression model."""
+    """Class used to predict feature adjustments for regression model."""
 
     def __init__(self, model, target, direction=1, current_pred=0, allowed_error=0.033,
                  early_exit=100, iteration_count=0):
         """Initializes the FeaturePredictor instance.
 
         Args:
-            model: The lasso regression model used for predictions.
+            model: The regression model used for predictions.
             target: The target value we are trying to hit.
             direction: Indicates whether feature values should be increased
                 or decreased to approach the target value (-1 or 1).

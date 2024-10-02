@@ -1,144 +1,175 @@
-
-# Imports
 import pandas as pd
-from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.model_selection import RepeatedKFold, cross_val_score, train_test_split
-from IPython.display import display
 import numpy as np
-
-from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.model_selection import RepeatedKFold, cross_val_score, train_test_split, RandomizedSearchCV, GridSearchCV
+from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Lasso
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import GridSearchCV
-from sklearn.preprocessing import normalize
+import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def lasso_cv(df, tolerance=None, alpha=None):
+    """
+    Perform Lasso regression with cross-validation to find optimal parameters.
 
+    Args:
+        df (pd.DataFrame): Input DataFrame containing features and the target variable 'achvz'.
+        tolerance (float, optional): Tolerance parameter for Lasso. It is the allowable error for convergence.
+        alpha (float, optional): Alpha parameter for Lasso regularization. It is the regularization parameter.
 
-# Lasso
-    # 0.2/0.8 split (test=.2)
-    # Gridsearch tunes param (alpha, tol), alpha may be hardset in future
-    # Returns feature coefficient strengths and other Lasso performance metrics
-
-def lasso_cv(df, tolerance, alpha):
+    Returns:
+        tuple: 
+            - pd.DataFrame: DataFrame containing performance metrics (Mean Absolute Error, Mean Squared Error, R² Score, Best Alpha, Best Tolerance).
+            - pd.DataFrame: DataFrame containing the coefficients of the features after Lasso regression.
+    """
+    logging.info("Starting Lasso cross-validation...")
 
     # Set target and data
     X = df.drop('achvz', axis=1)
     y = df['achvz']
 
-    # , random_state = 64
-
-    # train_test_split: test=.2, train=.8
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2)
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     # Standardize data
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
-    X_test = scaler.fit_transform(X_test)
-    
+    X_test = scaler.transform(X_test)
+
     # Setup Lasso
     lasso = Lasso()
-    lasso.fit(X_train, y_train)
 
-    # Lasso cross validation w/ tuning
-    if (tolerance == "none" and alpha == "none"):
-        param_grid = {
-            'alpha' : [0.001, 0.01, 0.01, 0.1, 1],
-            'tol' : [0.0001, 0.001, 0.01, 0.1, 1]
-        }
-
-    elif (tolerance != "none" and alpha == "none"):
-        param_grid = {
-            'alpha' : [0.00001, 0.0001, 0.001, 0.01],
-            'tol' : [tolerance]
-        }
-
-    elif (tolerance == "none" and alpha != "none"):
-        param_grid = {
-            'alpha' :[alpha],
-            'tol' : [0.0001, 0.001, 0.01, 0.1, 1]
-        }
-
-    elif (tolerance != "none" and alpha != "none"):
-        param_grid = {
-            'alpha' : [alpha],
-            'tol' : [tolerance]
-        }
-
-    lasso_cv = GridSearchCV(lasso, param_grid, cv = 5, n_jobs = -1)
-    lasso_cv.fit(X_train, y_train)
-    y_pred2 = lasso_cv.predict(X_test)
+    # Default parameter grid
+    param_grid = {
+        'alpha': [0.00001, 0.0001, 0.001, 0.01, 0.1, 1] if alpha is None else [alpha],
+        'tol': [0.00001, 0.0001, 0.001, 0.01, 0.1, 1] if tolerance is None else [tolerance]
+    }
     
-    # Results
-    lasso2 = lasso_cv.best_estimator_
-    lasso2.fit(X_train, y_train)
+    # Lasso cross-validation with tuning
+    logging.info(f"Using parameters: alpha={alpha}, tolerance={tolerance}")
+    lasso_cv = GridSearchCV(lasso, param_grid, cv=5, n_jobs=-1)
+    lasso_cv.fit(X_train, y_train)
 
-    metric_names = ["Mean absolute Error", "Mean Squared Error", "R2 Score", "Alpha", "Tolerance"]
-    values = [mean_absolute_error(y_test, y_pred2), mean_squared_error(y_test, y_pred2), r2_score(y_test, y_pred2), lasso_cv.best_params_['alpha'], lasso_cv.best_params_['tol']]
-    df_t = pd.DataFrame(values, columns =['Metrics'], index=metric_names)
+    # Predict and evaluate
+    y_pred = lasso_cv.predict(X_test)
+    
+    # Metrics
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    best_alpha = lasso_cv.best_params_['alpha']
+    best_tolerance = lasso_cv.best_params_['tol']
 
+    metrics = {
+        "Mean Absolute Error": mae,
+        "Mean Squared Error": mse,
+        "R² Score": r2,
+        "Best Alpha": best_alpha,
+        "Best Tolerance": best_tolerance
+    }
+
+    # Log the metrics
+    logging.info(
+        f"Metrics after Lasso cross-validation:\n"
+        f"Mean Absolute Error (MAE): {mae:.4f}\n"
+        f"Mean Squared Error (MSE): {mse:.4f}\n"
+        f"R² Score: {r2:.4f}\n"
+        f"Best Alpha: {best_alpha}\n"
+        f"Best Tolerance: {best_tolerance}"
+    )
+
+    df_t = pd.DataFrame.from_dict(metrics, orient='index', columns=['Metrics'])
+    
+    # Coefficients
     feature_names = df.columns.tolist()
     feature_names.remove('achvz')
+    df_t_coef = pd.DataFrame(lasso_cv.best_estimator_.coef_, columns=['Coefficients'], index=feature_names)
 
-    df_t_coef = pd.DataFrame(lasso2.coef_, columns =['Coefficients'], index=feature_names)
-    
-        # Reintroduce in seperate sort method
-    # df_t_coef_sorted = df_t_coef.iloc[np.argsort(np.abs(df_t_coef['Coefficients']))]
+    logging.info("Lasso cross-validation completed.")
+    return lasso_cv.best_estimator_, df_t, df_t_coef
 
-    return df_t, df_t_coef
+def ext_trees(df, n_estimators=50):
+    """
+    Perform ExtraTrees regression with hyperparameter tuning and cross-validation.
 
+    Args:
+        df (pd.DataFrame): Input DataFrame containing features and the target variable 'achvz'.
+        n_estimators (int, optional): Number of trees in the forest. Default is 50.
 
-def ext_trees(df):
-
+    Returns:
+        tuple:
+            - ExtraTreesRegressor: Trained ExtraTrees model with the best parameters found by RandomizedSearchCV.
+            - pd.DataFrame: DataFrame containing performance metrics (Mean Absolute Error, Mean Squared Error, R² Score).
+    """
+    logging.info("Starting ExtraTrees regression...")
 
     # Get target and data
     X = df.drop('achvz', axis=1)
     y = df['achvz']
-    normalize(X)
+
+    # Standardize data
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
 
     # 80/20 test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 64)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # print(X)
-    # print(y)
-    # Scale data
-    # scaler = RobustScaler()
-    # X_train = scaler.fit_transform(X_train)
-    # X_test = scaler.fit_transform(X_test)
+    # Define the base model
+    regressor = ExtraTreesRegressor(n_estimators=n_estimators)
 
-    # Fit model
-    regressor = ExtraTreesRegressor(n_estimators=50)
-    regressor.fit(X_train, y_train)
+    logging.info("Tuning hyperparameters with RandomizedSearchCV...")
 
-        
-    # Tune params - Way Way Way too heavy on execution time
+    # Define the hyperparameter space to search over
+    param_distributions = {
+        'n_estimators': [50, 100, 200, 500],
+        'max_depth': [None, 10, 20, 30, 50],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'bootstrap': [True, False]
+    }
+
+    # RandomizedSearchCV for hyperparameter tuning
+    random_search = RandomizedSearchCV(
+        estimator=regressor,
+        param_distributions=param_distributions,
+        n_iter=20,
+        cv=5,
+        scoring='negmean_absolute_error',
+        random_state=42,
+        n_jobs=-1 
+    )
+
+    # Fit RandomizedSearchCV to find the best parameters
+    random_search.fit(X_train, y_train)
+
+    # Get the best estimator from the randomized search
+    best_regressor = random_search.best_estimator_
+    logging.info(f"Best hyperparameters: {random_search.best_params_}")
+
+    # Cross-validation for model evaluation
+    cv = RepeatedKFold(n_splits=10, n_repeats=3, random_state=42)
+    n_scores = cross_val_score(best_regressor, X, y, scoring='neg_mean_absolute_error', cv=cv, n_jobs=-1, error_score='raise')
+
+    # Predictions
+    y_pred = best_regressor.predict(X_test)
     
-        # param_grid = {
-        #     'n_estimators' : [250, 500, 1000],
-        #     'max_depth' : [None, 10, 20, 30]
-        # }
+    # Calculate metrics
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
 
-        # regressor_t = GridSearchCV(regressor, param_grid, cv = 5, n_jobs = -1)
-        # regressor_t.fit(X_train, y_train)
-        # print(regressor_t.best_estimator_)
-        # regressor2 = regressor_t.best_estimator_
-    
+    # Log performance metrics
+    logging.info(
+        f"ExtraTrees Regressor metrics:\n"
+        f"MAE: {mae:.4f}, MSE: {mse:.4f}, R²: {r2:.4f}"
+    )
 
-    # Cross-val
-    cv = RepeatedKFold(n_splits=10, n_repeats=3, random_state=None)
-    n_scores = cross_val_score(regressor, X, y, scoring='neg_mean_absolute_error', cv=cv, n_jobs=-1, error_score='raise')
+    # Store metrics in DataFrame
+    metric_names = ["Mean Absolute Error", "Mean Squared Error", "R² Score"]
+    values = [mae, mse, r2]
+    df_t = pd.DataFrame(values, columns=['Metrics'], index=metric_names)
 
-        # Reintroduce later in separate function
-    # print('ExtraTreesRegressor MAE: %.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
-    y_pred = regressor.predict(X_test)
-    y_test = np.array(y_test)
+    logging.info("ExtraTrees regression completed.")
 
-    metric_names = ["Mean absolute Error", "Mean Squared Error", "R2 Score"]
-    values = [mean_absolute_error(y_test, y_pred), mean_squared_error(y_test, y_pred), r2_score(y_test, y_pred)]
-    df_t = pd.DataFrame(values, columns =['Metrics'], index=metric_names)
-
-    print(df_t)
-
-    # act_v_pred = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred})
-
-    return regressor, df_t
+    return best_regressor, df_t
