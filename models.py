@@ -79,15 +79,15 @@ def lasso_cv(df, tolerance=None, alpha=None):
         f"Best Tolerance: {best_tolerance}"
     )
 
-    df_t = pd.DataFrame.from_dict(metrics, orient='index', columns=['Metrics'])
+    metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=['Metrics'])
     
     # Coefficients
     feature_names = df.columns.tolist()
     feature_names.remove('achvz')
-    df_t_coef = pd.DataFrame(lasso_cv.best_estimator_.coef_, columns=['Coefficients'], index=feature_names)
+    coeffs_df = pd.DataFrame(lasso_cv.best_estimator_.coef_, columns=['Coefficients'], index=feature_names)
 
     logging.info("Lasso cross-validation completed.")
-    return lasso_cv.best_estimator_, df_t, df_t_coef
+    return lasso_cv.best_estimator_, metrics_df, coeffs_df
 
 def ext_trees(df, n_estimators=50):
     """

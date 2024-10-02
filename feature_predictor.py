@@ -112,6 +112,7 @@ class FeaturePredictor:
                 constraints.is_locked = True
                 logging.info("Feature %s locked at maximum value %s", column, max_val)
 
+        logging.info("Current model prediction: %s", self.current_pred)
         return df
 
     def update_weights(self, damping_factor=0.5):
