@@ -141,8 +141,8 @@ def filter_data():
     Returns:
         Response: A JSON response with filtered data and pagination details.
     """
-    start = int(request.args.get('start', start=0))
-    rows = int(request.args.get('limit', limit=10))
+    start = int(request.args.get('start', 0))
+    rows = int(request.args.get('limit', 10))
     district_name = request.args.get('district_name')
 
     df = get_df()

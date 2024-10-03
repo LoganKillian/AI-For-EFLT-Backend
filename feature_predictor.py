@@ -90,7 +90,7 @@ class FeaturePredictor:
             constraints = self.feature_constraints_map[column]
 
             # Continue if feature is not locked
-            if constraints.is_locked == False:
+            if constraints.is_locked == True:
                 continue
 
             # Get value of min_val, max_val, and adjust current value by adding weight
