@@ -17,7 +17,7 @@ For each trial, the user is presented with 2 main pieces of data
     $ `pip install -r requirements.txt`
 
 4. **Run the Flask Server**\
-    $ `Python main.py`
+    $ `python school_performance_dashboard.py`
 
 5. **Clone the React Repository**\
     $ `git clone https://github.com/LoganKillian/AI-For-EFLT-Frontend.git`
