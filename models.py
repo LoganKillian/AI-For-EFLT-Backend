@@ -4,7 +4,7 @@ from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.model_selection import RepeatedKFold, cross_val_score, train_test_split, RandomizedSearchCV, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Lasso
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,19 +20,38 @@ def lasso_cv(df, tolerance=None, alpha=None):
 
     Returns:
         tuple: 
-            - pd.DataFrame: DataFrame containing performance metrics (Mean Absolute Error, Mean Squared Error, R² Score, Best Alpha, Best Tolerance).
-            - pd.DataFrame: DataFrame containing the coefficients of the features after Lasso regression.
+            - Lasso: The trained Lasso model
+            - pd.DataFrame: DataFrame containing performance metrics
+            - pd.DataFrame: DataFrame containing the coefficients
+            - float: Overall mean achievement score
     """
     logging.info("Starting Lasso cross-validation...")
 
-    # Set target and data
-    X = df.drop('achvz', axis=1)
+    # Identifiers and target variables to exclude
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
+
+    # Categorical variables to exclude
+    categorical_vars = [
+        'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
+        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
+    ]
+
+    # Get the tunable continuous features
+    tunable_features = [
+        col for col in df.columns 
+        if (col not in exclude_ids and 
+            col not in categorical_vars and 
+            df[col].dtype in ['int64', 'float64'])
+    ]
+
+    # Set target and data using only tunable features
+    X = df[tunable_features]
     y = df['achvz']
 
     # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Standardize data
+    # Standardize the tunable features
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
@@ -40,12 +59,12 @@ def lasso_cv(df, tolerance=None, alpha=None):
     # Setup Lasso
     lasso = Lasso()
 
-    # Default parameter grid
+    # Default parameter grid for alpha and tolerance
     param_grid = {
         'alpha': [0.00001, 0.0001, 0.001, 0.01, 0.1, 1] if alpha is None else [alpha],
         'tol': [0.00001, 0.0001, 0.001, 0.01, 0.1, 1] if tolerance is None else [tolerance]
     }
-    
+
     # Lasso cross-validation with tuning
     logging.info(f"Using parameters: alpha={alpha}, tolerance={tolerance}")
     lasso_cv = GridSearchCV(lasso, param_grid, cv=5, n_jobs=-1)
@@ -56,7 +75,7 @@ def lasso_cv(df, tolerance=None, alpha=None):
     
     # Metrics
     mae = mean_absolute_error(y_test, y_pred)
-    mse = mean_squared_error(y_test, y_pred)
+    mse = root_mean_squared_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
     best_alpha = lasso_cv.best_params_['alpha']
     best_tolerance = lasso_cv.best_params_['tol']
@@ -66,110 +85,138 @@ def lasso_cv(df, tolerance=None, alpha=None):
         "Mean Squared Error": mse,
         "R² Score": r2,
         "Best Alpha": best_alpha,
-        "Best Tolerance": best_tolerance
+        "Best Tolerance": best_tolerance,
     }
 
-    # Log the metrics
-    logging.info(
-        f"Metrics after Lasso cross-validation:\n"
-        f"Mean Absolute Error (MAE): {mae:.4f}\n"
-        f"Mean Squared Error (MSE): {mse:.4f}\n"
-        f"R² Score: {r2:.4f}\n"
-        f"Best Alpha: {best_alpha}\n"
-        f"Best Tolerance: {best_tolerance}"
-    )
-
     metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=['Metrics'])
-    
+
     # Coefficients
-    feature_names = df.columns.tolist()
-    feature_names.remove('achvz')
-    coeffs_df = pd.DataFrame(lasso_cv.best_estimator_.coef_, columns=['Coefficients'], index=feature_names)
+    coeffs_df = pd.DataFrame(lasso_cv.best_estimator_.coef_, columns=['Coefficients'], index=tunable_features)
+    feature_importance = coeffs_df.reset_index().rename(columns={'index': 'feature'}).to_dict(orient='records')
 
     logging.info("Lasso cross-validation completed.")
-    return lasso_cv.best_estimator_, metrics_df, coeffs_df
+    return lasso_cv.best_estimator_, metrics_df, feature_importance
 
-def ext_trees(df, n_estimators=50):
+def ext_trees(df, feature_adjustments=None, n_estimators=50): 
     """
-    Perform ExtraTrees regression with hyperparameter tuning and cross-validation.
-
+    Perform ExtraTrees regression with proper handling of feature adjustments.
+    
     Args:
-        df (pd.DataFrame): Input DataFrame containing features and the target variable 'achvz'.
-        n_estimators (int, optional): Number of trees in the forest. Default is 50.
-
-    Returns:
-        tuple:
-            - ExtraTreesRegressor: Trained ExtraTrees model with the best parameters found by RandomizedSearchCV.
-            - pd.DataFrame: DataFrame containing performance metrics (Mean Absolute Error, Mean Squared Error, R² Score).
+        df (pd.DataFrame): Input DataFrame containing features and target
+        feature_adjustments (dict, optional): Dictionary of feature adjustments as percentages
+        n_estimators (int, optional): Number of trees in the forest
     """
     logging.info("Starting ExtraTrees regression...")
 
-    # Get target and data
-    X = df.drop('achvz', axis=1)
-    y = df['achvz']
+    # Store original values
+    original_df = df.copy()
+    
+    # Get tunable features
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
+    categorical_vars = [
+        'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
+        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
+    ]
+    
+    tunable_features = [
+        col for col in df.columns 
+        if (col not in exclude_ids and 
+            col not in categorical_vars and 
+            df[col].dtype in ['int64', 'float64'])
+    ]
 
-    # Standardize data
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-
-    # 80/20 test split
+    # Split data
+    X = original_df[tunable_features]
+    y = original_df['achvz']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Define the base model
-    regressor = ExtraTreesRegressor(n_estimators=n_estimators)
-
-    logging.info("Tuning hyperparameters with RandomizedSearchCV...")
-
-    # Define the hyperparameter space to search over
-    param_distributions = {
-        'n_estimators': [50, 100, 200, 500],
-        'max_depth': [None, 10, 20, 30, 50],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'bootstrap': [True, False]
-    }
-
-    # RandomizedSearchCV for hyperparameter tuning
-    random_search = RandomizedSearchCV(
-        estimator=regressor,
-        param_distributions=param_distributions,
-        n_iter=20,
-        cv=5,
-        scoring='negmean_absolute_error',
-        random_state=42,
-        n_jobs=-1 
-    )
-
-    # Fit RandomizedSearchCV to find the best parameters
-    random_search.fit(X_train, y_train)
-
-    # Get the best estimator from the randomized search
-    best_regressor = random_search.best_estimator_
-    logging.info(f"Best hyperparameters: {random_search.best_params_}")
-
-    # Cross-validation for model evaluation
-    cv = RepeatedKFold(n_splits=10, n_repeats=3, random_state=42)
-    n_scores = cross_val_score(best_regressor, X, y, scoring='neg_mean_absolute_error', cv=cv, n_jobs=-1, error_score='raise')
-
-    # Predictions
-    y_pred = best_regressor.predict(X_test)
+    # Fit scaler on all training data
+    scaler = StandardScaler()
+    scaler.fit(X_train)
     
-    # Calculate metrics
-    mae = mean_absolute_error(y_test, y_pred)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+    # Scale both training and test data
+    X_train_scaled = scaler.transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-    # Log performance metrics
-    logging.info(
-        f"ExtraTrees Regressor metrics:\n"
-        f"MAE: {mae:.4f}, MSE: {mse:.4f}, R²: {r2:.4f}"
+    # Train model on scaled original data
+    regressor = ExtraTreesRegressor(
+        n_estimators=n_estimators,
+        max_depth=30,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        bootstrap=False,
+        random_state=42
     )
+    regressor.fit(X_train_scaled, y_train)
+    
+    # Get predictions for test data (for metrics)
+    y_pred_test = regressor.predict(X_test_scaled)
+    
+    # Calculate feature importance similar to lasso_cv format
+    feature_importance = [
+        {'feature': feature, 'importance': importance}
+        for feature, importance in zip(tunable_features, regressor.feature_importances_)
+    ]
+    feature_importance = sorted(feature_importance, key=lambda x: abs(x['importance']), reverse=True)
+    
+    # Handle adjustments if provided
+    if feature_adjustments:
+        # First scale the entire dataset
+        X_full_scaled = scaler.transform(X)
+        X_full_scaled_df = pd.DataFrame(X_full_scaled, columns=tunable_features)
+        
+        # Apply adjustments to the scaled values
+        for feature, percentage in feature_adjustments.items():
+            if feature in tunable_features:
+                # Calculate the adjustment in scaled units
+                adjustment = percentage / 100.0
+                X_full_scaled_df[feature] *= (1 + adjustment)
+                logging.info(f"Adjusted {feature} by {percentage}%")
+        
+        # Get predictions using adjusted scaled features
+        y_pred_adjusted = regressor.predict(X_full_scaled_df)
+        
+        # Create comparison DataFrame with original scale values
+        comparison_df = pd.DataFrame({
+            'original_achvz': original_df['achvz'],
+            'predicted_achvz': y_pred_adjusted
+        })
 
-    # Store metrics in DataFrame
+        # Add original and adjusted feature values (in original scale)
+        for col in tunable_features:
+            comparison_df[f'original_{col}'] = original_df[col]
+            # If the feature was adjusted, inverse transform the adjusted scaled values
+            if col in feature_adjustments:
+                # Create a temporary array with only this feature's adjusted values
+                temp_scaled = np.zeros_like(X_full_scaled)
+                temp_scaled[:, tunable_features.index(col)] = X_full_scaled_df[col]
+                adjusted_values = scaler.inverse_transform(temp_scaled)[:, tunable_features.index(col)]
+                comparison_df[f'adjusted_{col}'] = adjusted_values
+            else:
+                comparison_df[f'adjusted_{col}'] = original_df[col]
+    else:
+        # If no adjustments, use original scaled data for predictions
+        X_full_scaled = scaler.transform(X)
+        y_pred_adjusted = regressor.predict(X_full_scaled)
+        
+        comparison_df = pd.DataFrame({
+            'original_achvz': original_df['achvz'],
+            'predicted_achvz': y_pred_adjusted
+        })
+        
+        # Add original values (no adjustments)
+        for col in tunable_features:
+            comparison_df[f'original_{col}'] = original_df[col]
+            comparison_df[f'adjusted_{col}'] = original_df[col]
+
+    # Calculate metrics using test data
+    mae = mean_absolute_error(y_test, y_pred_test)
+    mse = root_mean_squared_error(y_test, y_pred_test)
+    r2 = r2_score(y_test, y_pred_test)
+
     metric_names = ["Mean Absolute Error", "Mean Squared Error", "R² Score"]
     values = [mae, mse, r2]
-    df_t = pd.DataFrame(values, columns=['Metrics'], index=metric_names)
+    metrics_df = pd.DataFrame(values, columns=['Metrics'], index=metric_names)
 
     logging.info("ExtraTrees regression completed.")
-
-    return best_regressor, df_t
+    return regressor, metrics_df, comparison_df, feature_importance

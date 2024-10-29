@@ -9,7 +9,7 @@ FeatureConstraint = namedtuple('FeatureConstraint', ['weight', 'min_val', 'max_v
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class FeaturePredictor:
-    """Class used to predict feature adjustments for regression model."""
+    """Class used to predict feature adjustments for regression model, or adjust features to find new target"""
 
     def __init__(self, model, target, direction=1, current_pred=0, allowed_error=0.033,
                  early_exit=100, iteration_count=0):
@@ -64,11 +64,11 @@ class FeaturePredictor:
         self.feature_constraints_map = {
             column: FeatureConstraint(
                 weight=float(weights.iloc[i, 0]
-                             * (features_df[column].max_val()
-                                - features_df[column].min_val())
-                                * self.reduction),
-                min_val=features_df[column].min_val(),
-                max_val=features_df[column].max_val(),
+                             * (features_df[column].max()
+                                - features_df[column].min())
+                                * self.direction),
+                min_val=features_df[column].min(),
+                max_val=features_df[column].max(),
                 is_locked=False
             )
             for i, column in enumerate(features_df.columns)
@@ -76,43 +76,29 @@ class FeaturePredictor:
 
         logging.info("Weights initialized for features: %s", {column: constraints.weight for column, constraints in self.feature_constraints_map.items()})
 
-    def adjust_features(self, df):
-        """Adjusts feature values based on their constraints.
+    def adjust_features(self, df, adjustments={}):
+        """Adjusts feature values based on their constraints and user-defined percentage adjustments.
 
         Args:
             df (pd.DataFrame): DataFrame containing the feature values to be adjusted.
+            adjustments (dict): A dictionary mapping feature names to percentage adjustments.
 
         Returns:
             pd.DataFrame: The adjusted DataFrame with updated feature values.
-
         """
         for column in df:
             constraints = self.feature_constraints_map[column]
-
-            # Continue if feature is not locked
-            if constraints.is_locked == True:
+            if constraints.is_locked:
                 continue
 
-            # Get value of min_val, max_val, and adjust current value by adding weight
-            min_val = constraints.min_val
-            max_val = constraints.max_val
-            current_value = float(df.at[df.index[0], column])
-            adjusted_value = current_value + constraints.weight
+            # Apply user-specified percentage adjustments to all rows
+            if column in adjustments:
+                adjustment_percent = adjustments[column] / 100.0
+                df[column] *= (1 + adjustment_percent)  # Adjust all rows by the percentage
 
-            # Replace current value if in range of min and max, else lock value at min or max
-            if min_val < adjusted_value < max_val:
-                df[column].replace(current_value, adjusted_value, inplace=True)
-                logging.info("Feature %s adjusted from %s to %s", column, current_value, adjusted_value)
-            elif adjusted_value <= min_val:
-                df[column].replace(current_value, min_val, inplace=True)
-                constraints.is_locked = True
-                logging.info("Feature %s locked at minimum value %s", column, min_val)
-            elif adjusted_value >= max_val:
-                df[column].replace(current_value, max_val, inplace=True)
-                constraints.is_locked = True
-                logging.info("Feature %s locked at maximum value %s", column, max_val)
+                # Apply constraints to avoid out-of-bound values
+                df[column] = df[column].clip(constraints.min_val, constraints.max_val)
 
-        logging.info("Current model prediction: %s", self.current_pred)
         return df
 
     def update_weights(self, damping_factor=0.5):
@@ -131,7 +117,7 @@ class FeaturePredictor:
         for feature, constraints in self.feature_constraints_map.items():
             weight, min_val, max_val, is_locked = constraints
             adjusted_weight = weight * self.direction * damping_factor
-            self.feature_constraints_map[feature] = (adjusted_weight, min_val, max_val, is_locked)
+            self.feature_constraints_map[feature] = FeatureConstraint(adjusted_weight, min_val, max_val, is_locked)
             logging.info("Weights updated. Current prediction: %s, Direction: %s, Updated Weights: %s", 
               self.current_pred, self.direction, {feature: constraints.weight for feature, constraints in self.feature_constraints_map.items()})
 

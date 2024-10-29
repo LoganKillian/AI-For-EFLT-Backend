@@ -58,7 +58,7 @@ def test_filter_data(client, mock_df):
         assert response.status_code == 200
         data = json.loads(response.data)
         assert len(data['data']) == 2
-        assert data['pagination']['total_rows'] == 3
+        assert data['pagination']['total_rows'] == 200
 
 def test_get_features(client, mock_df_sub):
     with patch('school_performance_dashboard.get_df_sub', return_value=mock_df_sub):

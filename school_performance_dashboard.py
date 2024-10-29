@@ -36,16 +36,8 @@ logging.getLogger('').addHandler(ch)
 logging.getLogger('feature_predictor').addHandler(ch)
 logging.getLogger('models').addHandler(ch)
 
-# Constant to determine minimum number of rows where application does not issue warning
-# TODO: Trial and error test models with lowest amount of possible rows with still good predictions
-MINIMUM_REQUIRED_ROWS = 150
-
 # Initialize saved_models dictionary, where users can save and later load models
 saved_models = {}
-
-# Initialize locked_features set, which holds features that should not be adjusted
-# TODO: add feature names to this set and make sure adjusting features does not use features in this set
-locked_features = set()
 
 def log_monitor():
     """Monitors the log stream and adds log entries to a queue."""
@@ -73,6 +65,9 @@ def get_df():
     """
     if 'df' not in g:
         g.df = pd.read_csv('AL_Dist.csv')
+        first_columns = ['leaid', 'leanm', 'grade', 'year', 'achv', 'achvz']
+        other_columns = [col for col in g.df.columns if col not in first_columns]
+        g.df = g.df[first_columns + other_columns]
     return g.df
 
 def get_df_sub():
@@ -80,8 +75,8 @@ def get_df_sub():
     Retrieves and preprocesses a subset of the DataFrame.
 
     This function creates a subset of the main DataFrame by dropping specific columns 
-    and handling missing values and non-numeric columns. The subset is cached in the 
-    Flask `g` object.
+    and handling missing values and non-numeric columns. The 'leanm' column is retained 
+    even if it is non-numeric. The subset is cached in the Flask `g` object.
 
     Returns:
         pd.DataFrame: The preprocessed subset of the main DataFrame.
@@ -89,24 +84,56 @@ def get_df_sub():
     if 'df_sub' not in g:
         df = get_df()
         g.df_sub = df.copy()
-        drop_cols = ['leaid', 'achv', 'Locale3', 'math', 'rla']
-        g.df_sub.drop(columns=drop_cols, inplace=True)
         
-        # Remove non-numeric columns
+        # Columns to drop based on codebook
+        ignore_cols = [
+            'leaid', 'achv',
+            'LOCALE_VARS', 'DIST_FACTORS', 'COUNTY_FACTORS', 'HEALTH_FACTORS',
+            'CT_EconType', 'BlackBeltSm', 'Locale3'
+        ]
+        
+        # Keep year and grade for identification
+        id_cols = ['year', 'grade', 'leanm']
+        
+        # Drop specified columns but keep identifier columns
+        g.df_sub.drop(columns=[col for col in ignore_cols if col in g.df_sub.columns], 
+                     inplace=True)
+        
+        # Handle true categorical features with one-hot encoding
+        categorical_cols = [
+            'Locale4', 
+            'FoodDesert',
+            'CT_LowEducation', 
+            'CT_PopLoss', 
+            'CT_RetireDest',
+            'CT_PersistPoverty', 
+            'CT_PersistChildPoverty'
+        ]
+        
+        for col in categorical_cols:
+            if col in g.df_sub.columns:
+                # Create dummy variables and drop original column
+                dummies = pd.get_dummies(g.df_sub[col], prefix=col)
+                g.df_sub = pd.concat([g.df_sub, dummies], axis=1)
+                g.df_sub.drop(columns=[col], inplace=True)
+        
+        # Fill missing values with column mean for numeric columns
         for column in g.df_sub.columns:
-            if not g.df_sub[column].astype(str).str.contains(r'[0-9.-]', regex=True).any():
-                g.df_sub.drop(columns=column, inplace=True)
-
-        # Fill missing values with column mean
+            if column not in id_cols:  # Skip the identifier columns
+                if g.df_sub[column].dtype != 'object' and g.df_sub[column].isnull().any():
+                    mean = g.df_sub[column].mean()
+                    g.df_sub.fillna({column: mean}, inplace=True)
+        
+        # Convert remaining numeric columns
         for column in g.df_sub.columns:
-            if g.df_sub[column].isnull().any():
+            if column not in id_cols and g.df_sub[column].dtype == 'object':
+                g.df_sub[column] = pd.to_numeric(g.df_sub[column], errors='coerce')
+                
+        # Fill any remaining NaN values
+        for column in g.df_sub.columns:
+            if column not in id_cols and g.df_sub[column].isnull().any():
                 mean = g.df_sub[column].mean()
                 g.df_sub.fillna({column: mean}, inplace=True)
-    
-        # Convert object columns to numeric
-        for column in g.df_sub.columns:
-            if g.df_sub[column].dtype == 'object':
-                g.df_sub[column] = pd.to_numeric(g.df_sub[column], errors='coerce')
     
     return g.df_sub
 
@@ -127,6 +154,20 @@ def load_data():
     get_df_sub()
     return jsonify("Data loaded successfully")
 
+@app.route('/api/districts', methods=['GET'])
+@cache.cached(timeout=300, query_string=True)
+@limiter.limit("10 per minute")
+def get_districts():
+    """
+    Fetches all district names.
+
+    Returns:
+        Response: A JSON response containing the list of district names.
+    """
+    df = get_df()
+    districts = df['leanm'].unique().tolist()
+    return jsonify({"districts": districts})
+    
 @app.route('/api/filter_data', methods=['GET'])
 @limiter.limit("10 per minute")
 def filter_data():
@@ -141,53 +182,174 @@ def filter_data():
     Returns:
         Response: A JSON response with filtered data and pagination details.
     """
-    start = int(request.args.get('start', 0))
-    rows = int(request.args.get('limit', 10))
-    district_name = request.args.get('district_name')
+    district_names = request.args.get('district_name', '').split(',')
 
     df = get_df()
-    if district_name:
-        district_names = district_name.split(',')
+    if district_names and district_names != ['all']:
         data_slice = df[df['leanm'].isin(district_names)]
     else:
         data_slice = df
 
-    data_slice = data_slice.iloc[start:start + rows]
-    data_slice.insert(0, 'Index', (data_slice.index + 1))
-    total_rows = len(df)
-
     placeholder = ""
     data_slice = data_slice.where(pd.notna(data_slice), placeholder)
+    
+    # Convert to list of dicts to preserve column order
     data_json = data_slice.to_dict(orient='records')
-
-    total_pages = (total_rows // rows) + (1 if total_rows % rows != 0 else 0)
-    current_page = (start // rows) + 1
 
     response = {
         'data': data_json,
-        'pagination': {
-            'total_rows': total_rows,
-            'total_pages': total_pages,
-            'current_page': current_page,
-            'rows_per_page': rows
-        }
+        'columns': data_slice.columns.tolist(),
+        'total_rows': len(data_slice)
     }
 
     return jsonify(response)
 
+# TODO: Decide on if some or all categorical variables are sent with this route (used for feature selection drop down box)
 @app.route('/api/get_features', methods=['GET'])
 @cache.cached(timeout=300, query_string=True)
 @limiter.limit("50 per minute")
 def get_features():
     """
-    Retrieves the feature names from the subset DataFrame.
-
+    Retrieves the feature names from the subset DataFrame, excluding:
+    - Categorical variables
+    - Identifier columns (leaid, leanm, year, grade)
+    - Target variable (achvz)
+    - Ignored columns
+    
     Returns:
-        Response: A JSON response containing a list of feature names.
+        Response: A JSON response containing a list of continuous feature names suitable for tuning.
     """
     df_sub = get_df_sub()
-    features = df_sub.columns.tolist()
+    
+    # Identifiers and target variables to exclude
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
+    
+    # Categorical variables to exclude for
+    categorical_vars = [
+        'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
+        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
+    ]
+
+    fixed_vars = [
+        'perasn', 'perblk', 'perhsp', 'perind', 'perwht', 'perecd' ,'perell'
+    ]
+    
+    # Get all columns that are numeric and not in exclusion lists
+    features = [
+        col for col in df_sub.columns 
+        if (col not in exclude_ids and 
+            col not in categorical_vars and 
+            col not in fixed_vars and
+            df_sub[col].dtype in ['int64', 'float64'])
+    ]
+    
     return jsonify(features)
+
+# TODO: Python doc comments
+@app.route('/api/run_lasso', methods=['POST'])
+def run_lasso():
+    tolerance = request.json.get('tolerance')
+    alpha = request.json.get('alpha')
+    districts = request.json.get('districts', [])
+    df_sub = get_df_sub()
+    
+    # Filter for selected districts if provided
+    if districts and districts != ['all']:
+        df_sub = df_sub[df_sub['leanm'].isin(districts)]
+    
+    df_sub = df_sub.drop(columns=['leanm'])
+    
+    lasso_model, metrics, feature_importance = models.lasso_cv(df_sub, tolerance, alpha)
+    
+    response = {
+        'metrics': metrics.to_dict(),
+        'feature_importance': feature_importance,
+    }
+    
+    return jsonify(response)
+
+# TODO: Python doc comments
+@app.route('/api/adjust_features', methods=['POST'])
+@limiter.limit("50 per minute")
+def adjust_features():
+    features = request.json.get('features')
+    districts = request.json.get('districts', [])
+    df_sub = get_df_sub()
+    
+    # Filter for selected districts if provided
+    if districts and districts != ['all']:
+        df_sub = df_sub[df_sub['leanm'].isin(districts)]
+    
+    for feature, percentage in features.items():
+        if feature in df_sub.columns:
+            original_mean = df_sub[feature].mean()
+            df_sub[feature] *= (1 + percentage / 100)
+            new_mean = df_sub[feature].mean()
+            logging.info(f"Adjusted feature '{feature}' by {percentage}%")
+            logging.info(f"  - Original mean: {original_mean:.2f}")
+            logging.info(f"  - New mean: {new_mean:.2f}")
+            logging.info(f"  - Actual change: {((new_mean - original_mean) / original_mean * 100):.2f}%")
+    
+    # Run Extra Trees model with feature adjustments
+    ext_model, metrics, comparison_df, feature_importance = models.ext_trees(df_sub, feature_adjustments=features)
+    
+    comparison_df['leanm'] = df_sub['leanm']
+    comparison_df['grade'] = df_sub['grade']
+    comparison_df['year'] = df_sub['year']
+    
+    # Calculate summary statistics
+    summary_stats = {
+        'mean_original_achvz': float(comparison_df['original_achvz'].mean()),
+        'mean_predicted_achvz': float(comparison_df['predicted_achvz'].mean()),
+        'change_in_achvz': float(comparison_df['predicted_achvz'].mean() - comparison_df['original_achvz'].mean())
+    }
+    
+    # Add summary stats for adjusted features
+    for feature in features.keys():
+        orig_col = f'original_{feature}'
+        adj_col = f'adjusted_{feature}'
+        summary_stats[f'mean_{orig_col}'] = float(comparison_df[orig_col].mean())
+        summary_stats[f'mean_{adj_col}'] = float(comparison_df[adj_col].mean())
+        summary_stats[f'change_in_{feature}'] = float(comparison_df[adj_col].mean() - comparison_df[orig_col].mean())
+    
+    response = {
+        'comparison_data': comparison_df.to_dict(orient='records'),
+        'summary_stats': summary_stats,
+        'metrics': metrics.to_dict(),
+        'feature_importance': feature_importance
+    }
+    
+    return jsonify(response)
+
+# TODO: new API route for adjusting target values and finding new feature values
+#@app.route('/api/adjust_target', methods=['POST'])
+
+# @app.route('/api/run_extra_trees', methods=['POST'])
+# def run_extra_trees():
+#     n_estimators = request.json.get('n_estimators', 50)
+#     df_sub = get_df_sub()
+#     df_sub = df_sub.drop(columns=['leanm'])
+
+#     if df_sub.shape[0] < MINIMUM_REQUIRED_ROWS:
+#         return jsonify({
+#             'warning': 'Insufficient data for accurate predictions. Consider adding more data points.',
+#             'data_points': df_sub.shape[0]
+#         }), 400
+    
+#     ext_model, metrics = models.ext_trees(df_sub, n_estimators) #overall_achvz
+    
+#     # Get feature importances
+#     feature_importances = pd.DataFrame({
+#         'feature': df_sub.columns,
+#         'importance': ext_model.feature_importances_
+#     }).sort_values('importance', ascending=False)
+    
+#     response = {
+#         'metrics': metrics.to_dict(),
+#         'feature_importances': feature_importances.to_dict(orient='records'),
+#     }
+    
+#     return jsonify(response)
 
 @app.route('/api/get_feature_ranges', methods=['GET'])
 @cache.cached(timeout=300, query_string=True)
@@ -221,110 +383,6 @@ def get_length():
     """
     df = get_df()
     return jsonify(len(df))
-
-@app.route('/api/run_lasso', methods=['POST'])
-def run_lasso():
-    """
-    Runs a Lasso regression model on the subset DataFrame.
-
-    Args:
-        tolerance (float): The tolerance for the Lasso model.
-        alpha (float): The alpha value for the Lasso model.
-
-    Returns:
-        Response: A JSON response with model metrics and feature importance.
-    """
-    tolerance = request.json.get('tolerance')
-    alpha = request.json.get('alpha')
-    df_sub = get_df_sub()
-
-    if df_sub.shape[0] < MINIMUM_REQUIRED_ROWS:
-        return jsonify({
-            'warning': 'Insufficient data for accurate predictions. Consider adding more data points.',
-            'data_points': df_sub.shape[0]
-        }), 400
-    
-    lasso_model, metrics, coefficients = models.lasso_cv(df_sub, tolerance, alpha)
-    
-    # Sort coefficients by absolute value for feature importance
-    feature_importance = coefficients.abs().sort_values(by='Coefficients', ascending=False)
-    
-    response = {
-        'metrics': metrics.to_dict(),
-        'feature_importance': feature_importance.to_dict()
-    }
-    
-    return jsonify(response)
-
-@app.route('/api/run_extra_trees', methods=['POST'])
-def run_extra_trees():
-    """
-    Runs an Extra Trees model on the subset DataFrame.
-
-    Args:
-        n_estimators (int): The number of trees in the forest.
-
-    Returns:
-        Response: A JSON response with model metrics and feature importances.
-    """
-    n_estimators = request.json.get('n_estimators', 50)
-    df_sub = get_df_sub()
-
-    if df_sub.shape[0] < MINIMUM_REQUIRED_ROWS:
-        return jsonify({
-            'warning': 'Insufficient data for accurate predictions. Consider adding more data points.',
-            'data_points': df_sub.shape[0]
-        }), 400
-    
-    ext_model, metrics = models.ext_trees(df_sub, n_estimators)
-    
-    # Get feature importances
-    feature_importances = pd.DataFrame({
-        'feature': df_sub.columns,
-        'importance': ext_model.feature_importances_
-    }).sort_values('importance', ascending=False)
-    
-    response = {
-        'metrics': metrics.to_dict(),
-        'feature_importances': feature_importances.to_dict(orient='records')
-    }
-    
-    return jsonify(response)
-
-@app.route('/api/adjust_features', methods=['POST'])
-@limiter.limit("50 per minute")
-def adjust_features():
-    """
-    Adjusts the features based on input and runs the Lasso model for prediction.
-
-    Args:
-        features (dict): The features to adjust.
-        target (str): The target variable for prediction.
-
-    Returns:
-        Response: A JSON response with adjusted features and the prediction result.
-    """
-    features = request.json.get('features')
-    target = request.json.get('target')
-    df_sub = get_df_sub()
-    
-    # Run Lasso CV to get the model and coefficients
-    lasso_model, metrics, coefficients = models.lasso_cv(df_sub)
-    
-    predictor = FeaturePredictor(lasso_model, target)
-    
-    predictor.initialize_weights(coefficients, df_sub, {})
-    
-    adjusted_df = predictor.adjust_features(pd.DataFrame(features, index=[0]))
-    
-    prediction = predictor.model.predict(adjusted_df)[0]
-    
-    response = {
-        'adjusted_features': adjusted_df.to_dict(orient='records')[0],
-        'prediction': float(prediction)
-    }
-    
-    return jsonify(response)
 
 @app.route('/api/log_stream')
 def log_stream():
