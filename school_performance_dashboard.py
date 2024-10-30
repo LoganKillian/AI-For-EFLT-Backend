@@ -167,6 +167,34 @@ def get_districts():
     df = get_df()
     districts = df['leanm'].unique().tolist()
     return jsonify({"districts": districts})
+
+@app.route('/api/grades', methods=['GET'])
+@cache.cached(timeout=300, query_string=True)
+@limiter.limit("10 per minute")
+def get_grades():
+    """
+    Fetches all grade levels.
+
+    Returns:
+        Response: A JSON response containing the list of grade levels.
+    """
+    df = get_df()
+    grades = df['grade'].unique().tolist()
+    return jsonify({"grades": grades})
+
+@app.route('/api/years', methods=['GET'])
+@cache.cached(timeout=300, query_string=True)
+@limiter.limit("10 per minute")
+def get_years():
+    """
+    Fetches all years.
+
+    Returns:
+        Response: A JSON response containing the list of years.
+    """
+    df = get_df()
+    years = df['year'].unique().tolist()
+    return jsonify({"years": years})
     
 @app.route('/api/filter_data', methods=['GET'])
 @limiter.limit("10 per minute")
@@ -175,31 +203,46 @@ def filter_data():
     Filters data based on query parameters and returns a paginated response.
 
     Args:
-        start (int): The starting index of the rows.
-        limit (int): The number of rows to return.
-        district_name (str): The name of the district to filter by.
+        district_name (str): Comma-separated list of district names to filter by.
+        grade (str): Comma-separated list of grades to filter by.
+        year (str): Comma-separated list of years to filter by.
 
     Returns:
         Response: A JSON response with filtered data and pagination details.
     """
+    # Get filter parameters
     district_names = request.args.get('district_name', '').split(',')
+    grades = request.args.get('grade', '').split(',')
+    years = request.args.get('year', '').split(',')
+    
+    if years != ['all'] and years != ['']:
+        years = [int(year) for year in years if year.strip()]
+    
+    if grades != ['all'] and grades != ['']:
+        grades = [int(grade) for grade in grades if grade.strip()]
 
     df = get_df()
+    
+    # Apply filters
     if district_names and district_names != ['all']:
-        data_slice = df[df['leanm'].isin(district_names)]
-    else:
-        data_slice = df
+        df = df[df['leanm'].isin(district_names)]
+    
+    if grades and grades != ['all']:
+        df = df[df['grade'].isin(grades)]
+        
+    if years and years != ['all'] and years != ['']:
+        df = df[df['year'].isin(years)]
 
     placeholder = ""
-    data_slice = data_slice.where(pd.notna(data_slice), placeholder)
+    df = df.where(pd.notna(df), placeholder)
     
     # Convert to list of dicts to preserve column order
-    data_json = data_slice.to_dict(orient='records')
+    data_json = df.to_dict(orient='records')
 
     response = {
         'data': data_json,
-        'columns': data_slice.columns.tolist(),
-        'total_rows': len(data_slice)
+        'columns': df.columns.tolist(),
+        'total_rows': len(df)
     }
 
     return jsonify(response)
@@ -247,15 +290,49 @@ def get_features():
 
 # TODO: Python doc comments
 @app.route('/api/run_lasso', methods=['POST'])
+@app.route('/api/run_lasso', methods=['POST'])
 def run_lasso():
+    """
+    Run LASSO regression with filters for district, grade, and year.
+    """
     tolerance = request.json.get('tolerance')
     alpha = request.json.get('alpha')
     districts = request.json.get('districts', [])
-    df_sub = get_df_sub()
+    grades = request.json.get('grades', [])
+    years = request.json.get('years', [])
     
-    # Filter for selected districts if provided
+    # Debug logging
+    logging.info(f"Initial filters - districts: {districts}, grades: {grades}, years: {years}")
+    
+    # Convert years and grades to integers if they're not 'all'
+    if years and years != ['all']:
+        years = [int(year) for year in years if year.strip()]
+        logging.info(f"Converted years: {years}")
+    
+    if grades and grades != ['all']:
+        grades = [int(grade) for grade in grades if grade.strip()]
+        logging.info(f"Converted grades: {grades}")
+
+    df_sub = get_df_sub()
+    logging.info(f"Initial dataframe shape: {df_sub.shape}")
+    
+    # Simplified filtering logic
     if districts and districts != ['all']:
         df_sub = df_sub[df_sub['leanm'].isin(districts)]
+        logging.info(f"After district filter shape: {df_sub.shape}")
+    
+    if grades and grades != ['all']:
+        df_sub = df_sub[df_sub['grade'].isin(grades)]
+        logging.info(f"After grade filter shape: {df_sub.shape}")
+        
+    if years and years != ['all']:
+        df_sub = df_sub[df_sub['year'].isin(years)]
+        logging.info(f"After year filter shape: {df_sub.shape}")
+    
+    # Log unique values in each column to verify filters
+    logging.info(f"Unique districts in filtered data: {df_sub['leanm'].unique()}")
+    logging.info(f"Unique grades in filtered data: {df_sub['grade'].unique()}")
+    logging.info(f"Unique years in filtered data: {df_sub['year'].unique()}")
     
     df_sub = df_sub.drop(columns=['leanm'])
     
@@ -268,18 +345,51 @@ def run_lasso():
     
     return jsonify(response)
 
-# TODO: Python doc comments
 @app.route('/api/adjust_features', methods=['POST'])
 @limiter.limit("50 per minute")
 def adjust_features():
+    """
+    Adjust features and run predictions with filters for district, grade, and year.
+    """
     features = request.json.get('features')
     districts = request.json.get('districts', [])
-    df_sub = get_df_sub()
+    grades = request.json.get('grades', [])
+    years = request.json.get('years', [])
     
-    # Filter for selected districts if provided
+    # Debug logging
+    logging.info(f"Initial filters - districts: {districts}, grades: {grades}, years: {years}")
+    
+    # Convert years and grades to integers if they're not 'all'
+    if years and years != ['all']:
+        years = [int(year) for year in years if year.strip()]
+        logging.info(f"Converted years: {years}")
+    
+    if grades and grades != ['all']:
+        grades = [int(grade) for grade in grades if grade.strip()]
+        logging.info(f"Converted grades: {grades}")
+    
+    df_sub = get_df_sub()
+    logging.info(f"Initial dataframe shape: {df_sub.shape}")
+    
+    # Simplified filtering logic
     if districts and districts != ['all']:
         df_sub = df_sub[df_sub['leanm'].isin(districts)]
+        logging.info(f"After district filter shape: {df_sub.shape}")
     
+    if grades and grades != ['all']:
+        df_sub = df_sub[df_sub['grade'].isin(grades)]
+        logging.info(f"After grade filter shape: {df_sub.shape}")
+        
+    if years and years != ['all']:
+        df_sub = df_sub[df_sub['year'].isin(years)]
+        logging.info(f"After year filter shape: {df_sub.shape}")
+    
+    # Log unique values in each column to verify filters
+    logging.info(f"Unique districts in filtered data: {df_sub['leanm'].unique()}")
+    logging.info(f"Unique grades in filtered data: {df_sub['grade'].unique()}")
+    logging.info(f"Unique years in filtered data: {df_sub['year'].unique()}")
+    
+    # Rest of the function remains the same
     for feature, percentage in features.items():
         if feature in df_sub.columns:
             original_mean = df_sub[feature].mean()
@@ -290,21 +400,18 @@ def adjust_features():
             logging.info(f"  - New mean: {new_mean:.2f}")
             logging.info(f"  - Actual change: {((new_mean - original_mean) / original_mean * 100):.2f}%")
     
-    # Run Extra Trees model with feature adjustments
     ext_model, metrics, comparison_df, feature_importance = models.ext_trees(df_sub, feature_adjustments=features)
     
     comparison_df['leanm'] = df_sub['leanm']
     comparison_df['grade'] = df_sub['grade']
     comparison_df['year'] = df_sub['year']
     
-    # Calculate summary statistics
     summary_stats = {
         'mean_original_achvz': float(comparison_df['original_achvz'].mean()),
         'mean_predicted_achvz': float(comparison_df['predicted_achvz'].mean()),
         'change_in_achvz': float(comparison_df['predicted_achvz'].mean() - comparison_df['original_achvz'].mean())
     }
     
-    # Add summary stats for adjusted features
     for feature in features.keys():
         orig_col = f'original_{feature}'
         adj_col = f'adjusted_{feature}'
