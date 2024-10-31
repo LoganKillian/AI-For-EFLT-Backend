@@ -28,20 +28,12 @@ def lasso_cv(df, tolerance=None, alpha=None):
     logging.info("Starting Lasso cross-validation...")
 
     # Identifiers and target variables to exclude
-    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
-
-    # Categorical variables to exclude
-    categorical_vars = [
-        'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
-        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
-    ]
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
 
     # Get the tunable continuous features
     tunable_features = [
         col for col in df.columns 
-        if (col not in exclude_ids and 
-            col not in categorical_vars and 
-            df[col].dtype in ['int64', 'float64'])
+        if (col not in exclude_ids)
     ]
 
     # Set target and data using only tunable features
@@ -112,17 +104,11 @@ def ext_trees(df, feature_adjustments=None, n_estimators=50):
     original_df = df.copy()
     
     # Get tunable features
-    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
-    categorical_vars = [
-        'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
-        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
-    ]
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
     
     tunable_features = [
         col for col in df.columns 
-        if (col not in exclude_ids and 
-            col not in categorical_vars and 
-            df[col].dtype in ['int64', 'float64'])
+        if (col not in exclude_ids)
     ]
 
     # Split data

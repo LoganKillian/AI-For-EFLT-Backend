@@ -247,13 +247,37 @@ def filter_data():
 
     return jsonify(response)
 
-# TODO: Decide on if some or all categorical variables are sent with this route (used for feature selection drop down box)
 @app.route('/api/get_features', methods=['GET'])
 @cache.cached(timeout=300, query_string=True)
 @limiter.limit("50 per minute")
 def get_features():
     """
-    Retrieves the feature names from the subset DataFrame, excluding:
+    Retrieves the feature names from the subset DataFrame
+    
+    Returns:
+        Response: A JSON response containing a list of feature names.
+    """
+
+    df_sub = get_df_sub()
+    
+    # Identifiers and target variables to exclude
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
+
+    features = [
+        col for col in df_sub.columns 
+        if (col not in exclude_ids) 
+            #and df_sub[col].dtype in ['int64', 'float64'])
+    ]
+
+    return jsonify(features)
+
+# TODO: Decide on if some or all categorical variables are sent with this route (used for feature selection drop down box)
+@app.route('/api/get_tunable_features', methods=['GET'])
+@cache.cached(timeout=300, query_string=True)
+@limiter.limit("50 per minute")
+def get_tunable_features():
+    """
+    Retrieves the tunable feature names from the subset DataFrame, excluding:
     - Categorical variables
     - Identifier columns (leaid, leanm, year, grade)
     - Target variable (achvz)
@@ -265,31 +289,35 @@ def get_features():
     df_sub = get_df_sub()
     
     # Identifiers and target variables to exclude
-    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'achvz']
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
     
     # Categorical variables to exclude for
     categorical_vars = [
         'Locale4', 'FoodDesert', 'CT_LowEducation', 'CT_PopLoss', 
-        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty'
+        'CT_RetireDest', 'CT_PersistPoverty', 'CT_PersistChildPoverty',
+        'Locale4_Rural', 'Local4_Suburb', 'Locale4_Town', 'Locale4_Urban',
+        'FoodDesert_0.0', 'FoodDesert_1.0', 'CT_LowEducation_0.0',
+        'CT_LowEducation_1.0', 'CT_PopLoss_0.0', 'CT_PopLoss_1.0',
+        'CT_RetireDest_0.0', 'CT_RetireDest_1.0', 'CT_PersistPoverty_0.0',
+        'CT_PersistPoverty_1.0', 'CT_PersistChildPoverty_0.0', 'CT_PersistChildPoverty_1.0'
     ]
 
     fixed_vars = [
         'perasn', 'perblk', 'perhsp', 'perind', 'perwht', 'perecd' ,'perell'
     ]
     
-    # Get all columns that are numeric and not in exclusion lists
+    # Get all columns that are not in exclusion lists
     features = [
         col for col in df_sub.columns 
         if (col not in exclude_ids and 
             col not in categorical_vars and 
-            col not in fixed_vars and
-            df_sub[col].dtype in ['int64', 'float64'])
+            col not in fixed_vars)
+            # and df_sub[col].dtype in ['int64', 'float64'])
     ]
     
     return jsonify(features)
 
 # TODO: Python doc comments
-@app.route('/api/run_lasso', methods=['POST'])
 @app.route('/api/run_lasso', methods=['POST'])
 def run_lasso():
     """
@@ -430,33 +458,6 @@ def adjust_features():
 
 # TODO: new API route for adjusting target values and finding new feature values
 #@app.route('/api/adjust_target', methods=['POST'])
-
-# @app.route('/api/run_extra_trees', methods=['POST'])
-# def run_extra_trees():
-#     n_estimators = request.json.get('n_estimators', 50)
-#     df_sub = get_df_sub()
-#     df_sub = df_sub.drop(columns=['leanm'])
-
-#     if df_sub.shape[0] < MINIMUM_REQUIRED_ROWS:
-#         return jsonify({
-#             'warning': 'Insufficient data for accurate predictions. Consider adding more data points.',
-#             'data_points': df_sub.shape[0]
-#         }), 400
-    
-#     ext_model, metrics = models.ext_trees(df_sub, n_estimators) #overall_achvz
-    
-#     # Get feature importances
-#     feature_importances = pd.DataFrame({
-#         'feature': df_sub.columns,
-#         'importance': ext_model.feature_importances_
-#     }).sort_values('importance', ascending=False)
-    
-#     response = {
-#         'metrics': metrics.to_dict(),
-#         'feature_importances': feature_importances.to_dict(orient='records'),
-#     }
-    
-#     return jsonify(response)
 
 @app.route('/api/get_feature_ranges', methods=['GET'])
 @cache.cached(timeout=300, query_string=True)
