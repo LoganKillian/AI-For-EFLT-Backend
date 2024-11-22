@@ -110,30 +110,37 @@ def get_df_sub():
             'CT_PersistChildPoverty'
         ]
         
+        # First handle missing values in categorical columns
         for col in categorical_cols:
             if col in g.df_sub.columns:
+                # Fill missing values with mode (most frequent value)
+                mode_value = g.df_sub[col].mode()[0]
+                g.df_sub[col].fillna(mode_value, inplace=True)
                 # Create dummy variables and drop original column
-                dummies = pd.get_dummies(g.df_sub[col], prefix=col)
+                dummies = pd.get_dummies(g.df_sub[col], prefix=col, dummy_na=False)
                 g.df_sub = pd.concat([g.df_sub, dummies], axis=1)
                 g.df_sub.drop(columns=[col], inplace=True)
         
-        # Fill missing values with column mean for numeric columns
-        for column in g.df_sub.columns:
-            if column not in id_cols:  # Skip the identifier columns
-                if g.df_sub[column].dtype != 'object' and g.df_sub[column].isnull().any():
-                    mean = g.df_sub[column].mean()
-                    g.df_sub.fillna({column: mean}, inplace=True)
+        # Handle numeric columns
+        numeric_cols = [col for col in g.df_sub.columns 
+                       if col not in id_cols and 
+                       g.df_sub[col].dtype in ['int64', 'float64']]
         
-        # Convert remaining numeric columns
-        for column in g.df_sub.columns:
-            if column not in id_cols and g.df_sub[column].dtype == 'object':
-                g.df_sub[column] = pd.to_numeric(g.df_sub[column], errors='coerce')
-                
-        # Fill any remaining NaN values
-        for column in g.df_sub.columns:
-            if column not in id_cols and g.df_sub[column].isnull().any():
+        # Fill missing values with mean for numeric columns
+        for column in numeric_cols:
+            if g.df_sub[column].isnull().any():
                 mean = g.df_sub[column].mean()
                 g.df_sub.fillna({column: mean}, inplace=True)
+        
+        # Convert any remaining numeric columns that might be stored as objects
+        for column in g.df_sub.columns:
+            if (column not in id_cols and 
+                column not in categorical_cols and 
+                g.df_sub[column].dtype == 'object'):
+                g.df_sub[column] = pd.to_numeric(g.df_sub[column], errors='coerce')
+                if g.df_sub[column].isnull().any():
+                    mean = g.df_sub[column].mean()
+                    g.df_sub.fillna({column: mean}, inplace=True)
     
     return g.df_sub
 
@@ -181,6 +188,7 @@ def get_grades():
     df = get_df()
     grades = df['grade'].unique().tolist()
     return jsonify({"grades": grades})
+
 
 @app.route('/api/years', methods=['GET'])
 @cache.cached(timeout=300, query_string=True)
@@ -303,7 +311,8 @@ def get_tunable_features():
     ]
 
     fixed_vars = [
-        'perasn', 'perblk', 'perhsp', 'perind', 'perwht', 'perecd' ,'perell'
+        'perasn', 'perblk', 'perhsp', 'perind', 'perwht', 'perecd' , 'perell', 'CmPoverty',
+        'CmUnemp', 'CmSglPrnt', 'CmCollege', 'snapall'
     ]
     
     # Get all columns that are not in exclusion lists
