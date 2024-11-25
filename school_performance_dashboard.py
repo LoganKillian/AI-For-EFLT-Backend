@@ -75,8 +75,8 @@ def get_df_sub():
     Retrieves and preprocesses a subset of the DataFrame.
 
     This function creates a subset of the main DataFrame by dropping specific columns 
-    and handling missing values and non-numeric columns. The 'leanm' column is retained 
-    even if it is non-numeric. The subset is cached in the Flask `g` object.
+    and handling missing values and non-numeric columns. The 'leanm' and 'Locale4' columns 
+    are retained even if they are non-numeric. The subset is cached in the Flask `g` object.
 
     Returns:
         pd.DataFrame: The preprocessed subset of the main DataFrame.
@@ -92,8 +92,8 @@ def get_df_sub():
             'CT_EconType', 'BlackBeltSm', 'Locale3'
         ]
         
-        # Keep year and grade for identification
-        id_cols = ['year', 'grade', 'leanm']
+        # Keep identifier columns
+        id_cols = ['year', 'grade', 'leanm', 'Locale4']
         
         # Drop specified columns but keep identifier columns
         g.df_sub.drop(columns=[col for col in ignore_cols if col in g.df_sub.columns], 
@@ -101,14 +101,13 @@ def get_df_sub():
         
         # Handle true categorical features with one-hot encoding
         categorical_cols = [
-            'Locale4', 
             'FoodDesert',
             'CT_LowEducation', 
             'CT_PopLoss', 
             'CT_RetireDest',
             'CT_PersistPoverty', 
             'CT_PersistChildPoverty'
-        ]
+        ]  # Removed 'Locale4' from this list
         
         # First handle missing values in categorical columns
         for col in categorical_cols:
@@ -203,6 +202,35 @@ def get_years():
     df = get_df()
     years = df['year'].unique().tolist()
     return jsonify({"years": years})
+
+@app.route('/api/locales', methods=['GET'])
+@cache.cached(timeout=300, query_string=True)
+@limiter.limit("10 per minute")
+def get_locales():
+    """
+    Fetches all locales.
+
+    Returns:
+        Response: A JSON response containing the list of locales.
+    """
+    df = get_df()
+    locales = df['Locale4'].dropna().unique().tolist()
+    locales.sort()
+    return jsonify({"locales": locales})
+
+# @app.route('api/high_percentage_demographics', methods=['GET'])
+# @cache.cached(timeout=300, query_string=True)
+# @limiter.limit("10 per minute")
+# def get_high_percentage_demographics():
+#     """
+#     Fetches all high percentage demographics (Hpa)
+
+#     Returns:
+#         Response: A JSON response containing the list of hpas
+#     """
+#     df = get_df()
+#     hpas = ["Hperasn", "Hperblk", "Hperhsp", "Hperind", "Hperwht", "Hperecd", "Hperell"]
+#     return ?
     
 @app.route('/api/filter_data', methods=['GET'])
 @limiter.limit("10 per minute")
@@ -212,7 +240,7 @@ def filter_data():
 
     Args:
         district_name (str): Comma-separated list of district names to filter by.
-        grade (str): Comma-separated list of grades to filter by.
+        locale (str): Comma-separated list of locales to filter by.
         year (str): Comma-separated list of years to filter by.
 
     Returns:
@@ -220,14 +248,11 @@ def filter_data():
     """
     # Get filter parameters
     district_names = request.args.get('district_name', '').split(',')
-    grades = request.args.get('grade', '').split(',')
+    locales = request.args.get('locale', '').split(',')
     years = request.args.get('year', '').split(',')
     
     if years != ['all'] and years != ['']:
         years = [int(year) for year in years if year.strip()]
-    
-    if grades != ['all'] and grades != ['']:
-        grades = [int(grade) for grade in grades if grade.strip()]
 
     df = get_df()
     
@@ -235,8 +260,8 @@ def filter_data():
     if district_names and district_names != ['all']:
         df = df[df['leanm'].isin(district_names)]
     
-    if grades and grades != ['all']:
-        df = df[df['grade'].isin(grades)]
+    if locales and locales != ['all']:
+        df = df[df['Locale4'].isin(locales)]
         
     if years and years != ['all'] and years != ['']:
         df = df[df['year'].isin(years)]
@@ -330,46 +355,48 @@ def get_tunable_features():
 @app.route('/api/run_lasso', methods=['POST'])
 def run_lasso():
     """
-    Run LASSO regression with filters for district, grade, and year.
+    Run LASSO regression with filters for district, locale, and year.
     """
     tolerance = request.json.get('tolerance')
     alpha = request.json.get('alpha')
     districts = request.json.get('districts', [])
-    grades = request.json.get('grades', [])
+    locales = request.json.get('locales', [])
     years = request.json.get('years', [])
     
     # Debug logging
-    logging.info(f"Initial filters - districts: {districts}, grades: {grades}, years: {years}")
+    logging.info(f"Initial filters - districts: {districts}, locales: {locales}, years: {years}")
     
-    # Convert years and grades to integers if they're not 'all'
+    # Convert years to integers if they're not 'all'
     if years and years != ['all']:
         years = [int(year) for year in years if year.strip()]
         logging.info(f"Converted years: {years}")
-    
-    if grades and grades != ['all']:
-        grades = [int(grade) for grade in grades if grade.strip()]
-        logging.info(f"Converted grades: {grades}")
 
-    df_sub = get_df_sub()
-    logging.info(f"Initial dataframe shape: {df_sub.shape}")
+    # Get the original dataframe first to apply locale filtering
+    df = get_df()
+    logging.info(f"Initial dataframe shape: {df.shape}")
     
-    # Simplified filtering logic
+    # Apply filters on the original dataframe
     if districts and districts != ['all']:
-        df_sub = df_sub[df_sub['leanm'].isin(districts)]
-        logging.info(f"After district filter shape: {df_sub.shape}")
+        df = df[df['leanm'].isin(districts)]
+        logging.info(f"After district filter shape: {df.shape}")
     
-    if grades and grades != ['all']:
-        df_sub = df_sub[df_sub['grade'].isin(grades)]
-        logging.info(f"After grade filter shape: {df_sub.shape}")
+    if locales and locales != ['all']:
+        df = df[df['Locale4'].isin(locales)]
+        logging.info(f"After locale filter shape: {df.shape}")
         
     if years and years != ['all']:
-        df_sub = df_sub[df_sub['year'].isin(years)]
-        logging.info(f"After year filter shape: {df_sub.shape}")
+        df = df[df['year'].isin(years)]
+        logging.info(f"After year filter shape: {df.shape}")
     
     # Log unique values in each column to verify filters
-    logging.info(f"Unique districts in filtered data: {df_sub['leanm'].unique()}")
-    logging.info(f"Unique grades in filtered data: {df_sub['grade'].unique()}")
-    logging.info(f"Unique years in filtered data: {df_sub['year'].unique()}")
+    logging.info(f"Unique districts in filtered data: {df['leanm'].unique()}")
+    logging.info(f"Unique locales in filtered data: {df['Locale4'].unique()}")
+    logging.info(f"Unique years in filtered data: {df['year'].unique()}")
+    
+    # Now get the subset with preprocessed features for the filtered rows
+    df_sub = get_df_sub()
+    # Filter df_sub to match the filtered rows from original df
+    df_sub = df_sub[df_sub.index.isin(df.index)]
     
     df_sub = df_sub.drop(columns=['leanm'])
     
@@ -386,45 +413,47 @@ def run_lasso():
 @limiter.limit("50 per minute")
 def adjust_features():
     """
-    Adjust features and run predictions with filters for district, grade, and year.
+    Adjust features and run predictions with filters for district, locale, and year.
     """
     features = request.json.get('features')
     districts = request.json.get('districts', [])
-    grades = request.json.get('grades', [])
+    locales = request.json.get('locales', [])
     years = request.json.get('years', [])
     
     # Debug logging
-    logging.info(f"Initial filters - districts: {districts}, grades: {grades}, years: {years}")
+    logging.info(f"Initial filters - districts: {districts}, locales: {locales}, years: {years}")
     
-    # Convert years and grades to integers if they're not 'all'
+    # Convert years to integers if they're not 'all'
     if years and years != ['all']:
         years = [int(year) for year in years if year.strip()]
         logging.info(f"Converted years: {years}")
     
-    if grades and grades != ['all']:
-        grades = [int(grade) for grade in grades if grade.strip()]
-        logging.info(f"Converted grades: {grades}")
+    # Get the original dataframe first to apply locale filtering
+    df = get_df()
+    logging.info(f"Initial dataframe shape: {df.shape}")
     
-    df_sub = get_df_sub()
-    logging.info(f"Initial dataframe shape: {df_sub.shape}")
-    
-    # Simplified filtering logic
+    # Apply filters on the original dataframe
     if districts and districts != ['all']:
-        df_sub = df_sub[df_sub['leanm'].isin(districts)]
-        logging.info(f"After district filter shape: {df_sub.shape}")
+        df = df[df['leanm'].isin(districts)]
+        logging.info(f"After district filter shape: {df.shape}")
     
-    if grades and grades != ['all']:
-        df_sub = df_sub[df_sub['grade'].isin(grades)]
-        logging.info(f"After grade filter shape: {df_sub.shape}")
+    if locales and locales != ['all']:
+        df = df[df['Locale4'].isin(locales)]
+        logging.info(f"After locale filter shape: {df.shape}")
         
     if years and years != ['all']:
-        df_sub = df_sub[df_sub['year'].isin(years)]
-        logging.info(f"After year filter shape: {df_sub.shape}")
+        df = df[df['year'].isin(years)]
+        logging.info(f"After year filter shape: {df.shape}")
     
     # Log unique values in each column to verify filters
-    logging.info(f"Unique districts in filtered data: {df_sub['leanm'].unique()}")
-    logging.info(f"Unique grades in filtered data: {df_sub['grade'].unique()}")
-    logging.info(f"Unique years in filtered data: {df_sub['year'].unique()}")
+    logging.info(f"Unique districts in filtered data: {df['leanm'].unique()}")
+    logging.info(f"Unique locales in filtered data: {df['Locale4'].unique()}")
+    logging.info(f"Unique years in filtered data: {df['year'].unique()}")
+    
+    # Now get the subset with preprocessed features for the filtered rows
+    df_sub = get_df_sub()
+    # Filter df_sub to match the filtered rows from original df
+    df_sub = df_sub[df_sub.index.isin(df.index)]
     
     # Rest of the function remains the same
     for feature, percentage in features.items():

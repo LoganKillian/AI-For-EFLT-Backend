@@ -28,7 +28,7 @@ def lasso_cv(df, tolerance=None, alpha=None):
     logging.info("Starting Lasso cross-validation...")
 
     # Identifiers and target variables to exclude
-    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'Locale4', 'math', 'rla', 'achvz']
 
     # Get the tunable continuous features
     tunable_features = [
@@ -104,7 +104,7 @@ def ext_trees(df, feature_adjustments=None, n_estimators=50):
     original_df = df.copy()
     
     # Get tunable features
-    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'math', 'rla', 'achvz']
+    exclude_ids = ['leaid', 'leanm', 'year', 'grade', 'Locale4', 'math', 'rla', 'achvz']
     
     tunable_features = [
         col for col in df.columns 
@@ -138,12 +138,11 @@ def ext_trees(df, feature_adjustments=None, n_estimators=50):
     # Get predictions for test data (for metrics)
     y_pred_test = regressor.predict(X_test_scaled)
     
-    # Calculate feature importance similar to lasso_cv format
-    feature_importance = [
-        {'feature': feature, 'importance': importance}
-        for feature, importance in zip(tunable_features, regressor.feature_importances_)
-    ]
-    feature_importance = sorted(feature_importance, key=lambda x: abs(x['importance']), reverse=True)
+    # Create feature importance DataFrame
+    feature_importance = pd.DataFrame({
+        'feature': tunable_features,
+        'importance': regressor.feature_importances_
+    }).to_dict(orient='records')
     
     # Handle adjustments if provided
     if feature_adjustments:
